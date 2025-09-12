@@ -16,7 +16,7 @@ const server = http.createServer(app);
 // Configure Socket.io with CORS
 const io = socketIo(server, {
     cors: {
-        origin: ["http://localhost:3000", "https://your-frontend-domain.com"],
+        origin: ["http://localhost:3000", "https://cashearnersofficial.xyz"],
         methods: ["GET", "POST"],
         credentials: true
     },
@@ -51,7 +51,7 @@ const rateLimiter = new rateLimit.RateLimiterMemory({
 // Middleware
 app.use(helmet());
 app.use(cors({
-    origin: ["http://localhost:3000", "https://your-frontend-domain.com"],
+    origin: ["http://localhost:3000", "https://cashearnersofficial.xyz"],
     credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
