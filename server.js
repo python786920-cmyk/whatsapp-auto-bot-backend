@@ -3,7 +3,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('rate-limiter-flexible');
+const rateLimit = require('express-rate-limit');
 const winston = require('winston');
 require('dotenv').config();
 
@@ -16,7 +16,7 @@ const server = http.createServer(app);
 // Configure Socket.io with CORS
 const io = socketIo(server, {
     cors: {
-        origin: ["http://localhost:3000", "https://cashearnersofficial.xyz"],
+        origin: ["http://localhost:3000", "https://your-frontend-domain.com"],
         methods: ["GET", "POST"],
         credentials: true
     },
@@ -41,34 +41,26 @@ const logger = winston.createLogger({
     ]
 });
 
-// Rate limiter for API endpoints
-const rateLimiter = new rateLimit.RateLimiterMemory({
-    keyGenerator: (req) => req.ip,
-    points: 10, // Number of requests
-    duration: 60, // Per 60 seconds
+// Rate limiter using express-rate-limit
+const limiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 10, // limit each IP to 10 requests per windowMs
+    message: {
+        error: 'Too many requests from this IP, please try again later.'
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
 });
 
 // Middleware
 app.use(helmet());
 app.use(cors({
-    origin: ["http://localhost:3000", "https://cashearnersofficial.xyz"],
+    origin: ["http://localhost:3000", "https://your-frontend-domain.com"],
     credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// Rate limiting middleware
-app.use(async (req, res, next) => {
-    try {
-        await rateLimiter.consume(req.ip);
-        next();
-    } catch (rejRes) {
-        res.status(429).json({ 
-            error: 'Too Many Requests', 
-            retryAfter: Math.round(rejRes.msBeforeNext / 1000) || 1 
-        });
-    }
-});
+app.use(limiter);
 
 // Global variables for session management
 const sessions = new Map();
@@ -126,28 +118,6 @@ app.post('/api/send-message', async (req, res) => {
     }
 });
 
-app.post('/api/create-session', (req, res) => {
-    try {
-        const { sessionId = 'default' } = req.body;
-        
-        if (sessions.has(sessionId)) {
-            return res.status(400).json({ error: 'Session already exists' });
-        }
-
-        // Initialize new session
-        initializeWhatsAppSession(sessionId);
-        
-        res.json({ 
-            success: true, 
-            sessionId,
-            message: 'Session creation initiated'
-        });
-    } catch (error) {
-        logger.error('Session creation error:', error);
-        res.status(500).json({ error: 'Failed to create session' });
-    }
-});
-
 // Socket.io connection handling
 io.on('connection', (socket) => {
     logger.info(`Client connected: ${socket.id}`);
@@ -186,23 +156,6 @@ io.on('connection', (socket) => {
         } catch (error) {
             logger.error('Logout error:', error);
             socket.emit('error', { message: 'Failed to logout properly' });
-        }
-    });
-
-    // Handle manual message send via socket
-    socket.on('send_message', async (data) => {
-        try {
-            const { number, message } = data;
-            if (!whatsappHandler || !whatsappHandler.isReady()) {
-                socket.emit('error', { message: 'WhatsApp not connected' });
-                return;
-            }
-
-            await whatsappHandler.sendMessage(number, message);
-            socket.emit('message_sent', { number, message });
-        } catch (error) {
-            logger.error('Socket message send error:', error);
-            socket.emit('error', { message: 'Failed to send message' });
         }
     });
 
@@ -245,7 +198,7 @@ async function initializeWhatsAppSession(sessionId, socket = null) {
         whatsappHandler.on('qr', (qr) => {
             logger.info('QR Code generated');
             if (socket) socket.emit('qr', qr);
-            io.emit('qr', qr); // Broadcast to all clients
+            io.emit('qr', qr);
         });
 
         whatsappHandler.on('authenticated', () => {
@@ -317,39 +270,24 @@ async function initializeWhatsAppSession(sessionId, socket = null) {
 process.on('SIGINT', async () => {
     logger.info('Shutting down server...');
     
-    // Close all WhatsApp sessions
-    for (const [sessionId, session] of sessions) {
+    if (whatsappHandler) {
         try {
-            if (whatsappHandler) {
-                await whatsappHandler.destroy();
-            }
+            await whatsappHandler.destroy();
         } catch (error) {
-            logger.error(`Error closing session ${sessionId}:`, error);
+            logger.error(`Error closing WhatsApp session:`, error);
         }
     }
     
-    // Close server
     server.close(() => {
         logger.info('Server closed successfully');
         process.exit(0);
     });
 });
 
-process.on('uncaughtException', (error) => {
-    logger.error('Uncaught Exception:', error);
-    process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
-    process.exit(1);
-});
-
 // Start server
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, '0.0.0.0', () => {
     logger.info(`🚀 WhatsApp Auto Bot Backend running on port ${PORT}`);
-    logger.info(`📱 Frontend should connect to: ${process.env.NODE_ENV === 'production' ? 'wss' : 'ws'}://localhost:${PORT}`);
     logger.info(`🤖 Gemini AI: ${process.env.GEMINI_API_KEY ? '✅ Configured' : '❌ Missing API Key'}`);
 });
 
