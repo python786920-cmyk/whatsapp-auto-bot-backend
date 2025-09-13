@@ -16,19 +16,18 @@ const server = http.createServer(app);
 // Configure Socket.io with CORS
 const io = socketIo(server, {
     cors: {
-        origin: ["http://localhost:3000", "https://cashearnersofficial.xyz"],
+        origin: "*",
         methods: ["GET", "POST"],
         credentials: true
     },
     transports: ['websocket', 'polling']
 });
 
-// Configure Winston Logger
+// Configure Logger
 const logger = winston.createLogger({
     level: 'info',
     format: winston.format.combine(
         winston.format.timestamp(),
-        winston.format.errors({ stack: true }),
         winston.format.json()
     ),
     transports: [
@@ -41,35 +40,25 @@ const logger = winston.createLogger({
     ]
 });
 
-// Rate limiter using express-rate-limit
+// Rate limiter
 const limiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minute
-    max: 10, // limit each IP to 10 requests per windowMs
-    message: {
-        error: 'Too many requests from this IP, please try again later.'
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
+    windowMs: 60 * 1000,
+    max: 20,
+    message: { error: 'Too many requests' }
 });
 
 // Middleware
 app.use(helmet());
-app.use(cors({
-    origin: ["http://localhost:3000", "https://cashearnersofficial.xyz"],
-    credentials: true
-}));
+app.use(cors({ origin: "*", credentials: true }));
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(limiter);
 
-// Global variables for session management
+// Global variables
 const sessions = new Map();
 const activeClients = new Map();
-
-// WhatsApp Handler instance
 let whatsappHandler = null;
 
-// Health check endpoint
+// Health check
 app.get('/', (req, res) => {
     res.json({
         status: 'online',
@@ -83,7 +72,7 @@ app.get('/', (req, res) => {
 
 // API Routes
 app.get('/api/status', (req, res) => {
-    const sessionId = req.query.sessionId || 'default';
+    const sessionId = 'default';
     const session = sessions.get(sessionId);
     
     res.json({
@@ -97,23 +86,20 @@ app.get('/api/status', (req, res) => {
 
 app.post('/api/send-message', async (req, res) => {
     try {
-        const { number, message, sessionId = 'default' } = req.body;
+        const { number, message } = req.body;
         
         if (!number || !message) {
-            return res.status(400).json({ error: 'Number and message are required' });
+            return res.status(400).json({ error: 'Number and message required' });
         }
 
-        const session = sessions.get(sessionId);
-        if (!session || !session.isReady) {
-            return res.status(400).json({ error: 'WhatsApp session not ready' });
+        if (!whatsappHandler || !whatsappHandler.isClientReady()) {
+            return res.status(400).json({ error: 'WhatsApp not ready' });
         }
 
         const result = await whatsappHandler.sendMessage(number, message);
-        logger.info(`Message sent manually: ${number}`);
-        
         res.json({ success: true, messageId: result.id._serialized });
     } catch (error) {
-        logger.error('Manual message send error:', error);
+        logger.error('Send message error:', error);
         res.status(500).json({ error: 'Failed to send message' });
     }
 });
@@ -126,7 +112,7 @@ io.on('connection', (socket) => {
         sessionId: 'default'
     });
 
-    // Handle session start request
+    // Start session
     socket.on('start_session', () => {
         const sessionId = 'default';
         logger.info(`Starting WhatsApp session: ${sessionId}`);
@@ -135,14 +121,13 @@ io.on('connection', (socket) => {
             initializeWhatsAppSession(sessionId, socket);
         } catch (error) {
             logger.error('Failed to start session:', error);
-            socket.emit('error', { message: 'Failed to initialize WhatsApp session' });
+            socket.emit('error', { message: 'Failed to initialize session' });
         }
     });
 
-    // Handle logout request
+    // Logout
     socket.on('logout', async () => {
-        const sessionId = 'default';
-        logger.info(`Logout requested for session: ${sessionId}`);
+        logger.info('Logout requested');
         
         try {
             if (whatsappHandler) {
@@ -150,24 +135,41 @@ io.on('connection', (socket) => {
                 whatsappHandler = null;
             }
             
-            sessions.delete(sessionId);
+            sessions.clear();
             socket.emit('disconnected');
-            logger.info('WhatsApp session logged out successfully');
+            logger.info('Session logged out');
         } catch (error) {
             logger.error('Logout error:', error);
-            socket.emit('error', { message: 'Failed to logout properly' });
+            socket.emit('error', { message: 'Logout failed' });
         }
     });
 
-    // Handle client disconnect
+    // Send message via socket
+    socket.on('send_message', async (data) => {
+        try {
+            const { number, message } = data;
+            if (!whatsappHandler || !whatsappHandler.isClientReady()) {
+                socket.emit('error', { message: 'WhatsApp not connected' });
+                return;
+            }
+
+            await whatsappHandler.sendMessage(number, message);
+            socket.emit('message_sent', { number, message });
+        } catch (error) {
+            logger.error('Socket send error:', error);
+            socket.emit('error', { message: 'Failed to send message' });
+        }
+    });
+
+    // Disconnect
     socket.on('disconnect', () => {
         logger.info(`Client disconnected: ${socket.id}`);
         activeClients.delete(socket.id);
     });
 
-    // Send current status to newly connected client
+    // Send connection ack
     socket.emit('connect_ack', {
-        message: 'Connected to WhatsApp Auto Bot Backend',
+        message: 'Connected to WhatsApp Auto Bot',
         timestamp: new Date().toISOString()
     });
 });
@@ -180,7 +182,6 @@ async function initializeWhatsAppSession(sessionId, socket = null) {
             return;
         }
 
-        // Create session entry
         const sessionData = {
             id: sessionId,
             isConnected: false,
@@ -191,12 +192,11 @@ async function initializeWhatsAppSession(sessionId, socket = null) {
         };
         sessions.set(sessionId, sessionData);
 
-        // Initialize WhatsApp handler
         whatsappHandler = new WhatsAppHandler(sessionId, logger);
 
-        // Set up event listeners
+        // Event listeners
         whatsappHandler.on('qr', (qr) => {
-            logger.info('QR Code generated');
+            logger.info('QR Code generated and sent to frontend');
             if (socket) socket.emit('qr', qr);
             io.emit('qr', qr);
         });
@@ -232,7 +232,7 @@ async function initializeWhatsAppSession(sessionId, socket = null) {
         });
 
         whatsappHandler.on('message_received', (messageData) => {
-            logger.info(`Message received: ${messageData.from}`);
+            logger.info(`Message received from: ${messageData.from}`);
             sessionData.stats.received++;
             sessionData.lastActivity = new Date();
             if (socket) socket.emit('message_received', messageData);
@@ -249,46 +249,55 @@ async function initializeWhatsAppSession(sessionId, socket = null) {
         });
 
         whatsappHandler.on('error', (error) => {
-            logger.error('WhatsApp handler error:', error);
+            logger.error('WhatsApp handler error:', error.message);
             if (socket) socket.emit('error', { message: error.message });
             io.emit('error', { message: error.message });
         });
 
-        // Start the WhatsApp client
+        // Start WhatsApp client
         await whatsappHandler.initialize();
-        logger.info(`WhatsApp session ${sessionId} initialized successfully`);
+        logger.info(`WhatsApp session ${sessionId} initialized`);
 
     } catch (error) {
         logger.error(`Failed to initialize session ${sessionId}:`, error);
         sessions.delete(sessionId);
-        if (socket) socket.emit('error', { message: 'Failed to initialize WhatsApp session' });
+        if (socket) socket.emit('error', { message: 'Session initialization failed' });
         throw error;
     }
 }
 
-// Cleanup on process termination
+// Cleanup
 process.on('SIGINT', async () => {
-    logger.info('Shutting down server...');
+    logger.info('Shutting down...');
     
     if (whatsappHandler) {
         try {
             await whatsappHandler.destroy();
         } catch (error) {
-            logger.error(`Error closing WhatsApp session:`, error);
+            logger.error('Cleanup error:', error);
         }
     }
     
     server.close(() => {
-        logger.info('Server closed successfully');
+        logger.info('Server closed');
         process.exit(0);
     });
+});
+
+process.on('uncaughtException', (error) => {
+    logger.error('Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled Rejection:', reason);
 });
 
 // Start server
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, '0.0.0.0', () => {
-    logger.info(`🚀 WhatsApp Auto Bot Backend running on port ${PORT}`);
-    logger.info(`🤖 Gemini AI: ${process.env.GEMINI_API_KEY ? '✅ Configured' : '❌ Missing API Key'}`);
+    logger.info(`🚀 WhatsApp Auto Bot running on port ${PORT}`);
+    logger.info(`🤖 Gemini AI: ${process.env.GEMINI_API_KEY ? '✅ Ready' : '❌ Missing Key'}`);
+    logger.info(`🌍 Backend URL: https://whatsapp-auto-bot-backend.onrender.com`);
 });
 
 module.exports = { app, server, io };
