@@ -1,32 +1,61 @@
 {
   "name": "whatsapp-auto-bot-backend",
   "version": "1.0.0",
-  "description": "WhatsApp Auto Bot with AI",
+  "description": "Premium WhatsApp AI Assistant Backend with Gemini Integration",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "build": "npm install"
+    "test": "jest",
+    "build": "echo 'No build step required'",
+    "health": "curl http://localhost:10000/health"
   },
+  "keywords": [
+    "whatsapp",
+    "ai",
+    "bot",
+    "gemini",
+    "automation",
+    "chat"
+  ],
+  "author": "WhatsApp Bot Developer",
+  "license": "MIT",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "socket.io": "^4.7.4",
-    "whatsapp-web.js": "^1.34.0",
+    "socket.io": "^4.7.2",
+    "whatsapp-web.js": "^1.22.2",
     "qrcode": "^1.5.3",
+    "@google/generative-ai": "^0.2.1",
     "cors": "^2.8.5",
-    "helmet": "^7.1.0",
+    "helmet": "^7.0.0",
     "dotenv": "^16.3.1",
-    "axios": "^1.6.2",
-    "express-rate-limit": "^7.1.5",
-    "winston": "^3.11.0"
+    "winston": "^3.10.0",
+    "puppeteer": "^21.1.1",
+    "node-cron": "^3.0.2",
+    "lodash": "^4.17.21",
+    "moment": "^2.29.4",
+    "uuid": "^9.0.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
+    "nodemon": "^3.0.1",
+    "jest": "^29.6.2",
+    "supertest": "^6.3.3"
   },
-  "keywords": ["whatsapp", "bot", "ai", "automation"],
-  "author": "WhatsApp Bot",
-  "license": "MIT"
+  "optionalDependencies": {
+    "mongodb": "^5.7.0",
+    "redis": "^4.6.7",
+    "ioredis": "^5.3.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/whatsapp-auto-bot"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/whatsapp-auto-bot/issues"
+  },
+  "homepage": "https://github.com/yourusername/whatsapp-auto-bot#readme"
 }
