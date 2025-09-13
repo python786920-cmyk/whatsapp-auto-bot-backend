@@ -22,15 +22,15 @@ class WhatsAppHandler extends EventEmitter {
         this.geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
         
         // Rate limiting
-        this.minReplyInterval = 60000; // 1 minute
-        this.maxRepliesPerHour = 30;
+        this.minReplyInterval = 20000; // 1 minute
+        this.maxRepliesPerHour = 60;
         this.hourlyReplyCount = 0;
         this.lastHourReset = Date.now();
         
         // Auto-reply settings
         this.autoReplyEnabled = true;
-        this.typingDelayPerChar = 45;
-        this.baseTypingDelay = 2000;
+        this.typingDelayPerChar = 25;
+        this.baseTypingDelay = 1500;
         
         // Session directory
         this.sessionDir = path.join(__dirname, 'sessions', sessionId);
