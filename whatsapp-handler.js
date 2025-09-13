@@ -13,7 +13,7 @@ class WhatsAppHandler extends EventEmitter {
         this.client = null;
         this.isReady = false;
         this.isConnected = false;
-        this.lastMessageTime = new Map(); // Rate limiting per user
+        this.lastMessageTime = new Map();
         this.replyCount = 0;
         this.messageCount = 0;
         
@@ -21,18 +21,18 @@ class WhatsAppHandler extends EventEmitter {
         this.geminiApiKey = process.env.GEMINI_API_KEY;
         this.geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
         
-        // Rate limiting settings
-        this.minReplyInterval = 60000; // 1 minute between replies per user
-        this.maxRepliesPerHour = 30; // Maximum replies per hour globally
+        // Rate limiting
+        this.minReplyInterval = 60000; // 1 minute
+        this.maxRepliesPerHour = 30;
         this.hourlyReplyCount = 0;
         this.lastHourReset = Date.now();
         
         // Auto-reply settings
         this.autoReplyEnabled = true;
-        this.typingDelayPerChar = 45; // milliseconds per character for realistic typing
-        this.baseTypingDelay = 2000; // base delay before starting to type
+        this.typingDelayPerChar = 45;
+        this.baseTypingDelay = 2000;
         
-        // Initialize session directory
+        // Session directory
         this.sessionDir = path.join(__dirname, 'sessions', sessionId);
         this.ensureSessionDirectory();
     }
@@ -41,10 +41,10 @@ class WhatsAppHandler extends EventEmitter {
         try {
             if (!fs.existsSync(this.sessionDir)) {
                 fs.mkdirSync(this.sessionDir, { recursive: true });
-                this.logger.info(`Created session directory: ${this.sessionDir}`);
+                this.logger.info(`Session directory created: ${this.sessionDir}`);
             }
         } catch (error) {
-            this.logger.error('Failed to create session directory:', error);
+            this.logger.error('Session directory creation failed:', error);
         }
     }
 
@@ -52,7 +52,7 @@ class WhatsAppHandler extends EventEmitter {
         try {
             this.logger.info(`Initializing WhatsApp client for session: ${this.sessionId}`);
 
-            // Initialize WhatsApp client with LocalAuth
+            // Initialize client with NO Chrome path (let it use bundled Chromium)
             this.client = new Client({
                 authStrategy: new LocalAuth({
                     clientId: this.sessionId,
@@ -70,20 +70,28 @@ class WhatsAppHandler extends EventEmitter {
                         '--single-process',
                         '--disable-gpu',
                         '--disable-web-security',
-                        '--disable-features=VizDisplayCompositor'
-                    ],
-                    executablePath: process.env.CHROME_BIN || undefined
+                        '--disable-extensions',
+                        '--disable-plugins',
+                        '--disable-default-apps',
+                        '--disable-sync',
+                        '--hide-scrollbars',
+                        '--disable-background-timer-throttling',
+                        '--disable-renderer-backgrounding',
+                        '--disable-backgrounding-occluded-windows',
+                        '--memory-pressure-off'
+                    ]
+                    // NO executablePath - let Puppeteer use bundled Chromium
                 },
                 webVersionCache: {
                     type: 'remote',
-                    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+                    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html'
                 }
             });
 
             this.setupEventListeners();
             await this.client.initialize();
             
-            // Reset hourly counter every hour
+            // Reset hourly counter
             setInterval(() => {
                 this.hourlyReplyCount = 0;
                 this.lastHourReset = Date.now();
@@ -101,15 +109,16 @@ class WhatsAppHandler extends EventEmitter {
         // QR Code generation
         this.client.on('qr', async (qr) => {
             try {
-                this.logger.info('QR Code received, generating base64 image...');
+                this.logger.info('QR Code received, generating base64...');
                 const qrImage = await qrcode.toDataURL(qr, { 
-                    width: 256,
+                    width: 300,
                     margin: 2,
                     color: {
                         dark: '#000000',
                         light: '#FFFFFF'
                     }
                 });
+                this.logger.info('QR Code base64 generated successfully');
                 this.emit('qr', qrImage);
             } catch (error) {
                 this.logger.error('QR code generation error:', error);
@@ -139,6 +148,8 @@ class WhatsAppHandler extends EventEmitter {
             // Log client info
             this.client.info.then(info => {
                 this.logger.info(`Connected as: ${info.pushname} (${info.wid.user})`);
+            }).catch(() => {
+                this.logger.info('Connected successfully');
             });
         });
 
@@ -164,21 +175,21 @@ class WhatsAppHandler extends EventEmitter {
             this.logger.info(`Joined group: ${notification.chatId}`);
         });
 
-        // Call event handling
+        // Call handling
         this.client.on('call', async (call) => {
             this.logger.info(`Incoming call from: ${call.from}`);
             try {
                 await call.reject();
-                this.logger.info('Call rejected automatically');
+                this.logger.info('Call rejected');
             } catch (error) {
-                this.logger.error('Error rejecting call:', error);
+                this.logger.error('Call reject error:', error);
             }
         });
     }
 
     async handleIncomingMessage(message) {
         try {
-            // Skip if message is from status broadcast or own messages
+            // Skip status and own messages
             if (message.isStatus || message.fromMe) {
                 return;
             }
@@ -187,10 +198,10 @@ class WhatsAppHandler extends EventEmitter {
             const contact = await message.getContact();
             const chat = await message.getChat();
             
-            this.logger.info(`📨 New message from: ${contact.pushname || contact.number} (${message.from})`);
-            this.logger.info(`💬 Message: ${message.body}`);
+            this.logger.info(`📨 Message from: ${contact.pushname || contact.number}`);
+            this.logger.info(`💬 Content: ${message.body}`);
 
-            // Emit message received event
+            // Emit message received
             this.emit('message_received', {
                 from: message.from,
                 fromName: contact.pushname || contact.number,
@@ -199,52 +210,42 @@ class WhatsAppHandler extends EventEmitter {
                 isGroup: chat.isGroup
             });
 
-            // Check if auto-reply is enabled and should reply
+            // Auto-reply check
             if (this.shouldAutoReply(message, contact, chat)) {
                 await this.sendAutoReply(message, contact, chat);
             }
 
         } catch (error) {
-            this.logger.error('Error handling incoming message:', error);
+            this.logger.error('Message handling error:', error);
         }
     }
 
     shouldAutoReply(message, contact, chat) {
-        // Don't reply if auto-reply is disabled
-        if (!this.autoReplyEnabled) {
-            return false;
-        }
+        // Check if auto-reply enabled
+        if (!this.autoReplyEnabled) return false;
 
-        // Don't reply to group messages (optional - can be configured)
+        // Skip group messages
         if (chat.isGroup) {
-            this.logger.info('Skipping group message auto-reply');
+            this.logger.info('Skipping group message');
             return false;
         }
 
-        // Rate limiting: Check global hourly limit
+        // Check hourly limit
         if (this.hourlyReplyCount >= this.maxRepliesPerHour) {
-            this.logger.info('Hourly reply limit reached, skipping auto-reply');
+            this.logger.info('Hourly limit reached');
             return false;
         }
 
-        // Rate limiting: Check per-user time limit
+        // Check per-user rate limit
         const lastReplyTime = this.lastMessageTime.get(message.from) || 0;
-        const timeSinceLastReply = Date.now() - lastReplyTime;
-        
-        if (timeSinceLastReply < this.minReplyInterval) {
-            this.logger.info(`Rate limit: Too soon to reply to ${contact.pushname || contact.number}`);
+        if (Date.now() - lastReplyTime < this.minReplyInterval) {
+            this.logger.info(`Rate limit for ${contact.pushname || contact.number}`);
             return false;
         }
 
-        // Skip empty messages or media-only messages without caption
-        if (!message.body || message.body.trim().length === 0) {
-            this.logger.info('Skipping empty message');
-            return false;
-        }
-
-        // Skip if message is too short (might be accidental)
-        if (message.body.trim().length < 2) {
-            this.logger.info('Skipping very short message');
+        // Skip empty messages
+        if (!message.body || message.body.trim().length < 2) {
+            this.logger.info('Skipping empty/short message');
             return false;
         }
 
@@ -253,9 +254,9 @@ class WhatsAppHandler extends EventEmitter {
 
     async sendAutoReply(message, contact, chat) {
         try {
-            this.logger.info(`🤖 Generating AI reply for: ${contact.pushname || contact.number}`);
+            this.logger.info(`🤖 Generating reply for: ${contact.pushname || contact.number}`);
 
-            // Show typing indicator
+            // Show typing
             await chat.sendStateTyping();
 
             // Generate AI response
@@ -266,21 +267,20 @@ class WhatsAppHandler extends EventEmitter {
                 return;
             }
 
-            // Calculate realistic typing delay
+            // Realistic typing delay
             const typingDuration = this.calculateTypingDelay(aiResponse);
             await this.sleep(typingDuration);
 
-            // Stop typing and send message
+            // Send message
             await chat.clearState();
             await chat.sendMessage(aiResponse);
 
-            // Update counters and timestamps
+            // Update counters
             this.replyCount++;
             this.hourlyReplyCount++;
             this.lastMessageTime.set(message.from, Date.now());
 
-            this.logger.info(`✅ Auto-reply sent to: ${contact.pushname || contact.number}`);
-            this.logger.info(`🤖 Reply: ${aiResponse}`);
+            this.logger.info(`✅ Reply sent: ${aiResponse}`);
 
             // Emit reply sent event
             this.emit('reply_sent', {
@@ -292,16 +292,16 @@ class WhatsAppHandler extends EventEmitter {
             });
 
         } catch (error) {
-            this.logger.error('Error sending auto-reply:', error);
+            this.logger.error('Auto-reply error:', error);
             
-            // Send fallback message on error
+            // Send fallback
             try {
                 await chat.clearState();
-                const fallbackMessage = this.getFallbackMessage();
-                await chat.sendMessage(fallbackMessage);
+                const fallback = this.getFallbackMessage();
+                await chat.sendMessage(fallback);
                 this.logger.info('Fallback message sent');
             } catch (fallbackError) {
-                this.logger.error('Fallback message failed:', fallbackError);
+                this.logger.error('Fallback failed:', fallbackError);
             }
         }
     }
@@ -309,33 +309,25 @@ class WhatsAppHandler extends EventEmitter {
     async generateAIResponse(userMessage, userName) {
         try {
             if (!this.geminiApiKey) {
-                this.logger.warn('Gemini API key not configured');
+                this.logger.warn('Gemini API key missing');
                 return this.getFallbackMessage();
             }
 
-            // Create human-like prompt
             const prompt = this.createHumanPrompt(userMessage, userName);
 
             const requestBody = {
                 contents: [{
-                    parts: [{
-                        text: prompt
-                    }]
+                    parts: [{ text: prompt }]
                 }],
                 generationConfig: {
                     temperature: 0.9,
                     topK: 40,
                     topP: 0.95,
-                    maxOutputTokens: 150,
-                    stopSequences: []
+                    maxOutputTokens: 150
                 },
                 safetySettings: [
                     {
                         category: "HARM_CATEGORY_HARASSMENT",
-                        threshold: "BLOCK_MEDIUM_AND_ABOVE"
-                    },
-                    {
-                        category: "HARM_CATEGORY_HATE_SPEECH",
                         threshold: "BLOCK_MEDIUM_AND_ABOVE"
                     }
                 ]
@@ -345,16 +337,14 @@ class WhatsAppHandler extends EventEmitter {
                 `${this.geminiEndpoint}?key=${this.geminiApiKey}`,
                 requestBody,
                 {
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     timeout: 10000
                 }
             );
 
-            if (response.data && response.data.candidates && response.data.candidates[0]) {
+            if (response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
                 const aiReply = response.data.candidates[0].content.parts[0].text.trim();
-                this.logger.info('✨ AI response generated successfully');
+                this.logger.info('✨ AI response generated');
                 return this.cleanupAIResponse(aiReply);
             } else {
                 this.logger.warn('Invalid AI response structure');
@@ -369,38 +359,36 @@ class WhatsAppHandler extends EventEmitter {
 
     createHumanPrompt(userMessage, userName) {
         const prompts = [
-            `You are a friendly, helpful person chatting with your friend ${userName}. Reply naturally in a conversational way. Keep responses short (1-2 sentences max). Mix English and Hindi naturally (Hinglish style). Be warm and casual like a real friend.
+            `You are chatting with your friend ${userName}. Reply naturally in a friendly, casual way. Keep it short (1-2 sentences). Mix English and Hindi naturally if it feels right.
 
-User message: "${userMessage}"
+User: "${userMessage}"
 
-Reply as a friend would:`,
+Reply:`,
 
-            `Act like a close friend replying to ${userName}. Be natural, warm, and helpful. Use casual language mixing English-Hindi. Keep it brief and conversational.
-
-Their message: "${userMessage}"
-
-Your friendly reply:`,
-
-            `You're chatting with your buddy ${userName}. Reply like a real friend - casual, helpful, and natural. Use Hinglish if it feels right. Keep it short and sweet.
+            `Act like a close friend talking to ${userName}. Be warm, helpful, and natural. Use casual language. Keep response brief and conversational.
 
 They said: "${userMessage}"
 
-Reply:`
+Your reply:`,
+
+            `You're having a casual chat with ${userName}. Reply like a real friend would - natural, brief, and friendly. Mix languages if it feels right.
+
+Message: "${userMessage}"
+
+Response:`
         ];
 
         return prompts[Math.floor(Math.random() * prompts.length)];
     }
 
     cleanupAIResponse(response) {
-        // Remove any formatting artifacts
         let cleaned = response
-            .replace(/\*\*/g, '') // Remove bold markers
-            .replace(/\*/g, '') // Remove italic markers
-            .replace(/#{1,6}\s/g, '') // Remove headers
-            .replace(/```[\s\S]*?```/g, '') // Remove code blocks
+            .replace(/\*\*/g, '')
+            .replace(/\*/g, '')
+            .replace(/#{1,6}\s/g, '')
+            .replace(/```[\s\S]*?```/g, '')
             .trim();
 
-        // Limit length for WhatsApp
         if (cleaned.length > 200) {
             cleaned = cleaned.substring(0, 200) + '...';
         }
@@ -410,12 +398,12 @@ Reply:`
 
     getFallbackMessage() {
         const fallbacks = [
-            "Hey! Thanks for the message yaar 😊 Thoda busy hun abhi, will reply properly soon!",
-            "Arre sorry, thoda issue ho gaya. What's up? Tell me properly!",
-            "Hey buddy! Got your message. Kya baat hai? Bolo na 😄",
-            "Hi there! Received your text. Will get back to you soon! 👍",
-            "Yaar, AI thoda confused ho gaya 😅 Can you say that again?",
-            "Hey! Message received. Currently busy but will reply ASAP! ⚡"
+            "Hey! Thanks for the message 😊 Will reply properly soon!",
+            "Got your message! Currently busy but will get back to you 👍",
+            "Hi there! Message received. Will respond ASAP ⚡",
+            "Hey buddy! Got it. Will reply soon 😄",
+            "Thanks for reaching out! Will get back to you shortly 🙌",
+            "Message received! Currently occupied but will reply soon 📱"
         ];
         
         return fallbacks[Math.floor(Math.random() * fallbacks.length)];
@@ -424,27 +412,22 @@ Reply:`
     calculateTypingDelay(message) {
         const baseDelay = this.baseTypingDelay;
         const charDelay = message.length * this.typingDelayPerChar;
-        const randomFactor = 0.5 + Math.random(); // 50% to 150% of calculated time
+        const randomFactor = 0.5 + Math.random();
         
         const totalDelay = (baseDelay + charDelay) * randomFactor;
-        
-        // Cap between 2-8 seconds for realistic feeling
         return Math.max(2000, Math.min(8000, totalDelay));
     }
 
     async sendMessage(number, message) {
         try {
             if (!this.isReady) {
-                throw new Error('WhatsApp client is not ready');
+                throw new Error('WhatsApp client not ready');
             }
 
-            // Format number for WhatsApp
             const formattedNumber = number.includes('@c.us') ? number : `${number}@c.us`;
-            
-            // Send message
             const sentMessage = await this.client.sendMessage(formattedNumber, message);
             
-            this.logger.info(`📤 Manual message sent to: ${number}`);
+            this.logger.info(`📤 Message sent to: ${number}`);
             return sentMessage;
 
         } catch (error) {
@@ -457,7 +440,7 @@ Reply:`
         try {
             if (this.client) {
                 await this.client.logout();
-                this.logger.info('WhatsApp client logged out successfully');
+                this.logger.info('WhatsApp logged out');
             }
         } catch (error) {
             this.logger.error('Logout error:', error);
@@ -469,7 +452,7 @@ Reply:`
         try {
             if (this.client) {
                 await this.client.destroy();
-                this.logger.info('WhatsApp client destroyed successfully');
+                this.logger.info('WhatsApp client destroyed');
             }
             this.isReady = false;
             this.isConnected = false;
@@ -495,25 +478,13 @@ Reply:`
             hourlyReplies: this.hourlyReplyCount,
             isReady: this.isReady,
             isConnected: this.isConnected,
-            activeChats: this.lastMessageTime.size,
-            lastHourReset: new Date(this.lastHourReset).toISOString()
+            activeChats: this.lastMessageTime.size
         };
     }
 
-    // Configuration methods
     setAutoReplyEnabled(enabled) {
         this.autoReplyEnabled = enabled;
         this.logger.info(`Auto-reply ${enabled ? 'enabled' : 'disabled'}`);
-    }
-
-    setReplyInterval(intervalMs) {
-        this.minReplyInterval = intervalMs;
-        this.logger.info(`Reply interval set to: ${intervalMs}ms`);
-    }
-
-    setMaxRepliesPerHour(maxReplies) {
-        this.maxRepliesPerHour = maxReplies;
-        this.logger.info(`Max replies per hour set to: ${maxReplies}`);
     }
 }
 
