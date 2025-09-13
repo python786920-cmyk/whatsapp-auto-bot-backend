@@ -19,7 +19,7 @@ class WhatsAppHandler extends EventEmitter {
         
         // AI Configuration
         this.geminiApiKey = process.env.GEMINI_API_KEY;
-        this.geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
+        this.geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
         
         // Rate limiting
         this.minReplyInterval = 20000; // 1 minute
